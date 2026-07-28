@@ -1,0 +1,98 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Private one-way Todoist to iCloud Calendar sync, scheduled every five minutes.
+
+Parameters:
+  Namespace:
+    Type: String
+    Default: /todoist-apple-calendar
+  AppleAccountEmail:
+    Type: String
+  AppleCalendarName:
+    Type: String
+    Default: Home
+  ArtifactBucket:
+    Type: String
+  ArtifactKey:
+    Type: String
+
+Resources:
+  MappingsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: task_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: task_id
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+
+  SyncRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: todoist-apple-calendar-sync-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: sync-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: '*'
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem, dynamodb:Scan]
+                Resource: !GetAtt MappingsTable.Arn
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${Namespace}/*
+
+  SyncFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: todoist-apple-calendar-sync
+      Description: Private one-way Todoist to iCloud Calendar sync
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt SyncRole.Arn
+      Timeout: 90
+      MemorySize: 256
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref ArtifactKey
+      Environment:
+        Variables:
+          MAPPINGS_TABLE: !Ref MappingsTable
+          TODOIST_TOKEN_PARAMETER: !Sub ${Namespace}/todoist-token
+          APPLE_PASSWORD_PARAMETER: !Sub ${Namespace}/apple-app-password
+          APPLE_ACCOUNT_EMAIL: !Ref AppleAccountEmail
+          APPLE_CALENDAR_NAME: !Ref AppleCalendarName
+
+  Schedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: todoist-apple-calendar-every-5-minutes
+      ScheduleExpression: rate(5 minutes)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt SyncFunction.Arn
+          Id: sync
+
+  AllowEventBridge:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SyncFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt Schedule.Arn
+
+Outputs:
+  FunctionName: {Value: !Ref SyncFunction}
+  TableName: {Value: !Ref MappingsTable}

@@ -62,7 +62,7 @@ Resources:
       Runtime: python3.12
       Handler: handler.lambda_handler
       Role: !GetAtt SyncRole.Arn
-      Timeout: 90
+      Timeout: 180
       MemorySize: 256
       Code:
         S3Bucket: !Ref ArtifactBucket
@@ -75,6 +75,7 @@ Resources:
           APPLE_ACCOUNT_EMAIL: !Ref AppleAccountEmail
           APPLE_CALENDAR_NAME: !Ref AppleCalendarName
           DISPLAY_TIMEZONE: Asia/Kolkata
+          ALARM_MINUTES_BEFORE: 10
 
   Schedule:
     Type: AWS::Events::Rule

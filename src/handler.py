@@ -28,6 +28,7 @@ TABLE = boto3.resource("dynamodb").Table(os.environ["MAPPINGS_TABLE"])
 SSM = boto3.client("ssm")
 TODAY = lambda: datetime.now(timezone.utc)
 DISPLAY_TIMEZONE = ZoneInfo(os.getenv("DISPLAY_TIMEZONE", "Asia/Kolkata"))
+ALARM_MINUTES_BEFORE = int(os.getenv("ALARM_MINUTES_BEFORE", "10"))
 
 
 def _secret(name: str) -> str:
@@ -119,7 +120,14 @@ def _event_ics(task: dict) -> str | None:
             ))
         else:
             lines.extend((f"DTSTART:{start.astimezone(timezone.utc):%Y%m%dT%H%M%SZ}", f"DTEND:{end.astimezone(timezone.utc):%Y%m%dT%H%M%SZ}"))
-    lines.extend(("END:VEVENT", "END:VCALENDAR", ""))
+    # Apple Calendar recognizes DISPLAY VALARMs. A date-only task is alerted at
+    # 09:00 IST on its due day; a timed task is alerted shortly before start.
+    lines.extend(("BEGIN:VALARM", "ACTION:DISPLAY", f"DESCRIPTION:{_ical_escape(task['content'])}"))
+    if is_all_day:
+        lines.append("TRIGGER;RELATED=START:PT9H")
+    else:
+        lines.append(f"TRIGGER;RELATED=START:-PT{ALARM_MINUTES_BEFORE}M")
+    lines.extend(("END:VALARM", "END:VEVENT", "END:VCALENDAR", ""))
     return "\r\n".join(_fold(line) for line in lines)
 
 

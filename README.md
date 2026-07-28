@@ -32,7 +32,7 @@ The deployment uses a 256 MB Lambda, an EventBridge rule every five minutes, Dyn
 ```bash
 git clone https://github.com/Erscheinung/Todoist-Apple-Calendar-Sync.git
 cd Todoist-Apple-Calendar-Sync
-AWS_REGION=ap-south-1 scripts/deploy.sh
+scripts/deploy.sh --region ap-south-1
 ```
 
 The script prompts without echoing the two secrets, builds Linux-compatible Lambda dependencies, creates a private artifact bucket if needed, deploys the CloudFormation stack, writes the encrypted parameters, and runs one test sync.
@@ -43,7 +43,10 @@ Choose an existing iCloud calendar name such as `Home`. The first sync can take 
 
 | Prompt / environment variable | Default | Meaning |
 | --- | --- | --- |
-| `AWS_REGION` | `ap-south-1` | AWS region for all resources. |
+| `--region` / `AWS_REGION` | `ap-south-1` | AWS region for all resources. |
+| `--stack-name` / `STACK_NAME` | `todoist-apple-calendar-sync` | CloudFormation stack name. |
+| `--name` / `DEPLOYMENT_NAME` | `todoist-apple-calendar-sync` | Unique name prefix for the Lambda, role, and schedule. |
+| `--namespace` / `PARAMETER_NAMESPACE` | `/todoist-apple-calendar` | SSM Parameter Store path for the two secrets. |
 | Calendar name | `Home` | Existing iCloud calendar to receive sync events. |
 | `DISPLAY_TIMEZONE` | `Asia/Kolkata` | IANA timezone for Todoist floating times, such as `America/New_York` or `Europe/London`. |
 | `ALARM_MINUTES_BEFORE` | `10` | Alert lead time for timed tasks. All-day tasks alert at 9:00 AM local time. |
@@ -51,7 +54,7 @@ Choose an existing iCloud calendar name such as `Home`. The first sync can take 
 For example:
 
 ```bash
-AWS_REGION=eu-west-1 DISPLAY_TIMEZONE=Europe/London ALARM_MINUTES_BEFORE=15 scripts/deploy.sh
+scripts/deploy.sh --region eu-west-1 --timezone Europe/London --alarm-minutes 15
 ```
 
 To replace a leaked or revoked token/password without redeploying, run:

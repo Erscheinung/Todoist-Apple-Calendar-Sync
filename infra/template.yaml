@@ -5,6 +5,10 @@ Parameters:
   Namespace:
     Type: String
     Default: /todoist-apple-calendar
+  DeploymentName:
+    Type: String
+    Default: todoist-apple-calendar-sync
+    Description: Unique lowercase name for the Lambda, IAM role, and schedule in this AWS region.
   AppleAccountEmail:
     Type: String
   AppleCalendarName:
@@ -40,7 +44,7 @@ Resources:
   SyncRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: todoist-apple-calendar-sync-role
+      RoleName: !Sub ${DeploymentName}-role
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -65,7 +69,7 @@ Resources:
   SyncFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: todoist-apple-calendar-sync
+      FunctionName: !Ref DeploymentName
       Description: Private one-way Todoist to iCloud Calendar sync
       Runtime: python3.12
       Handler: handler.lambda_handler
@@ -88,7 +92,7 @@ Resources:
   Schedule:
     Type: AWS::Events::Rule
     Properties:
-      Name: todoist-apple-calendar-every-5-minutes
+      Name: !Sub ${DeploymentName}-every-5-minutes
       ScheduleExpression: rate(5 minutes)
       State: ENABLED
       Targets:

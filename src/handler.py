@@ -14,6 +14,7 @@ import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from urllib.error import HTTPError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import boto3
@@ -32,15 +33,26 @@ def _secret(name: str) -> str:
 
 
 def _todoist_tasks(token: str) -> list[dict]:
-    request = Request(
-        "https://api.todoist.com/api/v1/tasks",
-        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-    )
-    try:
-        with urlopen(request, timeout=25) as response:
-            return json.load(response)
-    except HTTPError as exc:
-        raise RuntimeError(f"Todoist request failed with HTTP {exc.code}") from exc
+    tasks: list[dict] = []
+    cursor = None
+    while True:
+        query = f"?{urlencode({'cursor': cursor})}" if cursor else ""
+        request = Request(
+            f"https://api.todoist.com/api/v1/tasks{query}",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        )
+        try:
+            with urlopen(request, timeout=25) as response:
+                payload = json.load(response)
+        except HTTPError as exc:
+            raise RuntimeError(f"Todoist request failed with HTTP {exc.code}") from exc
+        if isinstance(payload, list):  # compatibility with older Todoist endpoint responses
+            tasks.extend(payload)
+            return tasks
+        tasks.extend(payload.get("results", []))
+        cursor = payload.get("next_cursor")
+        if not cursor:
+            return tasks
 
 
 def _calendar(username: str, password: str, calendar_name: str):
@@ -151,7 +163,18 @@ def lambda_handler(event, context):
                 continue
             except Exception as exc:
                 LOG.warning("Recreating event for task %s after update failure: %s", task_id, exc)
-        event_resource = calendar.save_event(ics)
+        try:
+            event_resource = calendar.save_event(ics)
+        except Exception as create_error:
+            # A previous invocation may have created the deterministic UID but
+            # stopped before its DynamoDB mapping was saved. Reconcile it
+            # instead of creating a duplicate or failing forever.
+            try:
+                event_resource = calendar.event_by_uid(f"todoist-{task_id}@todoist-apple-calendar.local")
+                event_resource.data = ics
+                event_resource.save()
+            except Exception:
+                raise create_error
         _save_mapping(task_id, str(event_resource.url), fingerprint)
         created += 1
 

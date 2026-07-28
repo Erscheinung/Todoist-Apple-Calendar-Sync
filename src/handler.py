@@ -13,6 +13,7 @@ import os
 import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -26,6 +27,7 @@ LOG.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 TABLE = boto3.resource("dynamodb").Table(os.environ["MAPPINGS_TABLE"])
 SSM = boto3.client("ssm")
 TODAY = lambda: datetime.now(timezone.utc)
+DISPLAY_TIMEZONE = ZoneInfo(os.getenv("DISPLAY_TIMEZONE", "Asia/Kolkata"))
 
 
 def _secret(name: str) -> str:
@@ -108,7 +110,15 @@ def _event_ics(task: dict) -> str | None:
         amount = int(duration.get("amount", 60))
         unit = duration.get("unit", "minute")
         end = start + (timedelta(hours=amount) if unit == "hour" else timedelta(minutes=amount))
-        lines.extend((f"DTSTART:{start.astimezone(timezone.utc):%Y%m%dT%H%M%SZ}", f"DTEND:{end.astimezone(timezone.utc):%Y%m%dT%H%M%SZ}"))
+        if start.tzinfo is None:
+            # Todoist floating times are wall-clock times in the user's timezone,
+            # not UTC timestamps. The calendar is intentionally configured for IST.
+            lines.extend((
+                f"DTSTART;TZID={DISPLAY_TIMEZONE.key}:{start:%Y%m%dT%H%M%S}",
+                f"DTEND;TZID={DISPLAY_TIMEZONE.key}:{end:%Y%m%dT%H%M%S}",
+            ))
+        else:
+            lines.extend((f"DTSTART:{start.astimezone(timezone.utc):%Y%m%dT%H%M%SZ}", f"DTEND:{end.astimezone(timezone.utc):%Y%m%dT%H%M%SZ}"))
     lines.extend(("END:VEVENT", "END:VCALENDAR", ""))
     return "\r\n".join(_fold(line) for line in lines)
 
@@ -141,12 +151,17 @@ def lambda_handler(event, context):
     calendar = _calendar(apple_email, apple_password, os.environ["APPLE_CALENDAR_NAME"])
     active_ids: set[str] = set()
     created = updated = deleted = skipped = 0
+    timed = all_day = 0
 
     for task in _todoist_tasks(token):
         ics = _event_ics(task)
         if not ics:
             skipped += 1
             continue
+        if "T" in task["due"]["date"]:
+            timed += 1
+        else:
+            all_day += 1
         task_id = str(task["id"])
         active_ids.add(task_id)
         fingerprint = _fingerprint(ics)
@@ -190,6 +205,13 @@ def lambda_handler(event, context):
             TABLE.delete_item(Key={"task_id": item["task_id"]})
             deleted += 1
 
-    result = {"created": created, "updated": updated, "deleted": deleted, "skipped_without_due_date": skipped}
+    result = {
+        "created": created,
+        "updated": updated,
+        "deleted": deleted,
+        "eligible_timed": timed,
+        "eligible_all_day": all_day,
+        "skipped_without_due_date": skipped,
+    }
     LOG.info("Sync finished: %s", result)
     return result

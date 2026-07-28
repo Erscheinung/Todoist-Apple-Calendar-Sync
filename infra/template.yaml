@@ -74,6 +74,7 @@ Resources:
           APPLE_PASSWORD_PARAMETER: !Sub ${Namespace}/apple-app-password
           APPLE_ACCOUNT_EMAIL: !Ref AppleAccountEmail
           APPLE_CALENDAR_NAME: !Ref AppleCalendarName
+          DISPLAY_TIMEZONE: Asia/Kolkata
 
   Schedule:
     Type: AWS::Events::Rule

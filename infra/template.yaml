@@ -10,6 +10,14 @@ Parameters:
   AppleCalendarName:
     Type: String
     Default: Home
+  DisplayTimezone:
+    Type: String
+    Default: Asia/Kolkata
+    Description: IANA timezone used for Todoist floating due times, e.g. Europe/London.
+  AlarmMinutesBefore:
+    Type: Number
+    Default: 10
+    Description: Minutes before a timed task to show an Apple Calendar alert.
   ArtifactBucket:
     Type: String
   ArtifactKey:
@@ -74,8 +82,8 @@ Resources:
           APPLE_PASSWORD_PARAMETER: !Sub ${Namespace}/apple-app-password
           APPLE_ACCOUNT_EMAIL: !Ref AppleAccountEmail
           APPLE_CALENDAR_NAME: !Ref AppleCalendarName
-          DISPLAY_TIMEZONE: Asia/Kolkata
-          ALARM_MINUTES_BEFORE: 10
+          DISPLAY_TIMEZONE: !Ref DisplayTimezone
+          ALARM_MINUTES_BEFORE: !Ref AlarmMinutesBefore
 
   Schedule:
     Type: AWS::Events::Rule

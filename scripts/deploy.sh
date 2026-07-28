@@ -11,6 +11,10 @@ artifact_bucket="todoist-apple-calendar-artifacts-${account_id}-${region}"
 read -r -p "Apple Account email: " apple_email
 read -r -p "iCloud calendar name [Home]: " calendar_name
 calendar_name="${calendar_name:-Home}"
+read -r -p "IANA timezone [${DISPLAY_TIMEZONE:-Asia/Kolkata}]: " display_timezone
+display_timezone="${display_timezone:-${DISPLAY_TIMEZONE:-Asia/Kolkata}}"
+read -r -p "Timed-task alert minutes before start [${ALARM_MINUTES_BEFORE:-10}]: " alarm_minutes
+alarm_minutes="${alarm_minutes:-${ALARM_MINUTES_BEFORE:-10}}"
 read -r -s -p "Todoist API token (input hidden): " todoist_token
 printf '\n'
 read -r -s -p "Apple app-specific password (input hidden): " apple_password
@@ -37,7 +41,7 @@ aws cloudformation deploy \
   --stack-name "$stack_name" \
   --template-file "$root_dir/infra/template.yaml" \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides "AppleAccountEmail=$apple_email" "AppleCalendarName=$calendar_name" "ArtifactBucket=$artifact_bucket" "ArtifactKey=$artifact_key"
+  --parameter-overrides "AppleAccountEmail=$apple_email" "AppleCalendarName=$calendar_name" "DisplayTimezone=$display_timezone" "AlarmMinutesBefore=$alarm_minutes" "ArtifactBucket=$artifact_bucket" "ArtifactKey=$artifact_key"
 
 aws ssm put-parameter --region "$region" --name "$namespace/todoist-token" --type SecureString --value "$todoist_token" --overwrite >/dev/null
 aws ssm put-parameter --region "$region" --name "$namespace/apple-app-password" --type SecureString --value "$apple_password" --overwrite >/dev/null

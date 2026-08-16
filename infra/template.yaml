@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Private one-way Todoist to iCloud Calendar sync, scheduled every five minutes.
+Description: Private one-way Todoist to iCloud Calendar sync, every 15 minutes from 7:30 AM to midnight IST.
 
 Parameters:
   Namespace:
@@ -89,23 +89,43 @@ Resources:
           DISPLAY_TIMEZONE: !Ref DisplayTimezone
           ALARM_MINUTES_BEFORE: !Ref AlarmMinutesBefore
 
-  Schedule:
+  # EventBridge cron expressions are UTC. These two rules cover 07:30–23:45
+  # Asia/Kolkata every day, with no overnight invocations.
+  DaySchedule:
     Type: AWS::Events::Rule
     Properties:
-      Name: !Sub ${DeploymentName}-every-5-minutes
-      ScheduleExpression: rate(5 minutes)
+      Name: !Sub ${DeploymentName}-every-15-minutes-daytime
+      ScheduleExpression: cron(0/15 2-17 ? * * *)
       State: ENABLED
       Targets:
         - Arn: !GetAtt SyncFunction.Arn
-          Id: sync
+          Id: sync-daytime
 
-  AllowEventBridge:
+  DayScheduleFinalHour:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub ${DeploymentName}-every-15-minutes-daytime-final-hour
+      ScheduleExpression: cron(0,15 18 ? * * *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt SyncFunction.Arn
+          Id: sync-daytime-final-hour
+
+  AllowEventBridgeDay:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !Ref SyncFunction
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
-      SourceArn: !GetAtt Schedule.Arn
+      SourceArn: !GetAtt DaySchedule.Arn
+
+  AllowEventBridgeDayFinalHour:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SyncFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DayScheduleFinalHour.Arn
 
 Outputs:
   FunctionName: {Value: !Ref SyncFunction}

@@ -1,6 +1,6 @@
 # Private Todoist → Apple Calendar Sync
 
-A small, self-hosted AWS sync for **all active Todoist projects** to an iCloud Calendar. It runs every five minutes and only manages the events it creates—your existing Apple Calendar events are untouched.
+A small, self-hosted AWS sync for **all active Todoist projects** to an iCloud Calendar. It runs every 15 minutes from 7:30 AM through 11:45 PM Asia/Kolkata and pauses overnight. It only manages the events it creates—your existing Apple Calendar events are untouched.
 
 > This is an independent project; it is not created by, affiliated with, or supported by Doist or Apple.
 
@@ -18,7 +18,9 @@ Tasks without a due date do not appear in a calendar. This sync is deliberately 
 
 ## Architecture and approximate cost
 
-The deployment uses a 256 MB Lambda, an EventBridge rule every five minutes, DynamoDB on-demand for mappings, standard encrypted SSM Parameter Store values, and a private S3 artifact bucket. Typical use fits comfortably in Lambda's free tier; without it, expect roughly US$1–2/month, plus negligible storage/log costs.
+The deployment uses a 256 MB Lambda, two EventBridge cron rules covering 7:30 AM–midnight Asia/Kolkata, DynamoDB on-demand for mappings, standard encrypted SSM Parameter Store values, and a private S3 artifact bucket. The daytime window produces 65 scheduled syncs per day (about 2,000 per 31-day month), compared with 8,928 monthly syncs for the former five-minute, 24-hour schedule. This also reduces the two per-invocation KMS decrypt requests for the SSM secrets to about 4,000 per 31-day month, normally below KMS's 20,000-request monthly free tier. Lambda, EventBridge, and DynamoDB usage should remain within their free or negligible-cost ranges for this workload; CloudWatch Logs and S3 storage are extra but typically small.
+
+The schedule is intentionally expressed in UTC because EventBridge cron rules use UTC. For the default `Asia/Kolkata` deployment, `cron(0/15 2-17 ? * * *)` runs from 7:30 AM through 11:15 PM IST, and `cron(0,15 18 ? * * *)` adds the 11:30 PM and 11:45 PM runs. To change the frequency or pause window, edit the two `ScheduleExpression` values in `infra/template.yaml`, convert the desired local times to UTC, then redeploy with `scripts/deploy.sh`. If using a timezone other than Asia/Kolkata, adjust the cron hours yourself; EventBridge cron does not apply the `DISPLAY_TIMEZONE` parameter to schedules and does not automatically handle daylight-saving changes.
 
 ## Prerequisites
 
@@ -45,7 +47,7 @@ Choose an existing iCloud calendar name such as `Home`. The first sync can take 
 | --- | --- | --- |
 | `--region` / `AWS_REGION` | `ap-south-1` | AWS region for all resources. |
 | `--stack-name` / `STACK_NAME` | `todoist-apple-calendar-sync` | CloudFormation stack name. |
-| `--name` / `DEPLOYMENT_NAME` | `todoist-apple-calendar-sync` | Unique name prefix for the Lambda, role, and schedule. |
+| `--name` / `DEPLOYMENT_NAME` | `todoist-apple-calendar-sync` | Unique name prefix for the Lambda, role, and schedules. |
 | `--namespace` / `PARAMETER_NAMESPACE` | `/todoist-apple-calendar` | SSM Parameter Store path for the two secrets. |
 | Calendar name | `Home` | Existing iCloud calendar to receive sync events. |
 | `DISPLAY_TIMEZONE` | `Asia/Kolkata` | IANA timezone for Todoist floating times, such as `America/New_York` or `Europe/London`. |

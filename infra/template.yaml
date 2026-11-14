@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Private one-way Todoist to iCloud Calendar sync, every 15 minutes from 7:30 AM to midnight IST.
+Description: Private one-way Todoist to iCloud and/or Google Calendar sync, every 15 minutes from 7:30 AM to midnight IST, with an optional week digest URL.
 
 Parameters:
   Namespace:
@@ -11,6 +11,8 @@ Parameters:
     Description: Unique lowercase name for the Lambda, IAM role, and schedule in this AWS region.
   AppleAccountEmail:
     Type: String
+    Default: ''
+    Description: Apple Account email for iCloud CalDAV. Leave empty to turn the iCloud sink off.
   AppleCalendarName:
     Type: String
     Default: Home
@@ -22,10 +24,32 @@ Parameters:
     Type: Number
     Default: 10
     Description: Minutes before a timed task to show an Apple Calendar alert.
+  GoogleCalendarId:
+    Type: String
+    Default: ''
+    Description: ID of a dedicated Google calendar shared with the service account ("Make changes to events"). Empty = Google sink off.
+  GoogleBusyCalendarIds:
+    Type: String
+    Default: ''
+    Description: Comma-separated Google calendar IDs (shared with the service account, "See only free/busy" is enough) whose busy time goes into the week digest.
+  EnableWeekDigest:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Create a Function URL that serves the week digest to holders of the digest bearer secret.
+  DigestHours:
+    Type: String
+    Default: '08:00-21:00'
+    Description: Local hours used for free-time minutes in the digest.
   ArtifactBucket:
     Type: String
   ArtifactKey:
     Type: String
+
+Conditions:
+  WeekDigest: !Equals [!Ref EnableWeekDigest, 'true']
+  GoogleOn: !Not [!Equals [!Ref GoogleCalendarId, '']]
+  GoogleBusyOn: !Not [!Equals [!Ref GoogleBusyCalendarIds, '']]
 
 Resources:
   MappingsTable:
@@ -60,7 +84,7 @@ Resources:
                 Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
                 Resource: '*'
               - Effect: Allow
-                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem, dynamodb:Scan]
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:Scan]
                 Resource: !GetAtt MappingsTable.Arn
               - Effect: Allow
                 Action: ssm:GetParameter
@@ -88,6 +112,9 @@ Resources:
           APPLE_CALENDAR_NAME: !Ref AppleCalendarName
           DISPLAY_TIMEZONE: !Ref DisplayTimezone
           ALARM_MINUTES_BEFORE: !Ref AlarmMinutesBefore
+          GOOGLE_CALENDAR_ID: !Ref GoogleCalendarId
+          GOOGLE_SERVICE_ACCOUNT_PARAMETER: !If [GoogleOn, !Sub '${Namespace}/google-service-account', '']
+          GOOGLE_BUSY_CALENDAR_IDS: !Ref GoogleBusyCalendarIds
 
   # EventBridge cron expressions are UTC. These two rules cover 07:30–23:45
   # Asia/Kolkata every day, with no overnight invocations.
@@ -127,6 +154,89 @@ Resources:
       Principal: events.amazonaws.com
       SourceArn: !GetAtt DayScheduleFinalHour.Arn
 
+  # Week digest: a separate, read-only function behind a public HTTPS URL. Without the bearer
+  # secret the only answers are 401/404. Unlike an S3 presigned URL (max 7 days) the URL never
+  # expires; rotate the secret instead. Its role can read three parameters and write its own
+  # logs: no DynamoDB, no CalDAV password, no calendar writes.
+  DigestRole:
+    Type: AWS::IAM::Role
+    Condition: WeekDigest
+    Properties:
+      RoleName: !Sub ${DeploymentName}-digest-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: digest-read
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${DeploymentName}-digest:*
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${Namespace}/todoist-token
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${Namespace}/digest-token
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${Namespace}/google-service-account
+
+  DigestFunction:
+    Type: AWS::Lambda::Function
+    Condition: WeekDigest
+    Properties:
+      FunctionName: !Sub ${DeploymentName}-digest
+      Description: Read-only week digest (Todoist + calendar free/busy) for a watch
+      Runtime: python3.12
+      Handler: handler.digest_handler
+      Role: !GetAtt DigestRole.Arn
+      Timeout: 20
+      MemorySize: 256
+      ReservedConcurrentExecutions: 2
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref ArtifactKey
+      Environment:
+        Variables:
+          TODOIST_TOKEN_PARAMETER: !Sub ${Namespace}/todoist-token
+          DIGEST_TOKEN_PARAMETER: !Sub ${Namespace}/digest-token
+          GOOGLE_SERVICE_ACCOUNT_PARAMETER: !If [GoogleBusyOn, !Sub '${Namespace}/google-service-account', '']
+          GOOGLE_BUSY_CALENDAR_IDS: !Ref GoogleBusyCalendarIds
+          DISPLAY_TIMEZONE: !Ref DisplayTimezone
+          DIGEST_HOURS: !Ref DigestHours
+
+  DigestUrl:
+    Type: AWS::Lambda::Url
+    Condition: WeekDigest
+    Properties:
+      TargetFunctionArn: !GetAtt DigestFunction.Arn
+      AuthType: NONE
+
+  # Since October 2025 a public (AuthType NONE) function URL needs BOTH permissions
+  # (lambda:InvokeFunctionUrl and lambda:InvokeFunction); otherwise callers get 403.
+  AllowDigestUrl:
+    Type: AWS::Lambda::Permission
+    Condition: WeekDigest
+    Properties:
+      FunctionName: !Ref DigestFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+
+  AllowDigestInvoke:
+    Type: AWS::Lambda::Permission
+    Condition: WeekDigest
+    Properties:
+      FunctionName: !Ref DigestFunction
+      Action: lambda:InvokeFunction
+      Principal: '*'
+
 Outputs:
   FunctionName: {Value: !Ref SyncFunction}
+  DigestUrl:
+    Condition: WeekDigest
+    Value: !GetAtt DigestUrl.FunctionUrl
   TableName: {Value: !Ref MappingsTable}

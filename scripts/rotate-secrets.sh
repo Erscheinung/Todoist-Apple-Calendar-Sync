@@ -2,6 +2,12 @@
 set -euo pipefail
 
 region="${AWS_REGION:-ap-south-1}"
+# Secrets go to SSM from a 0600 temp file (file://), never as a command-line argument visible in `ps`.
+put_secret() {
+  _f="$(mktemp)"; chmod 600 "$_f"; printf '%s' "$2" > "$_f"
+  aws ssm put-parameter --region "$region" --name "$1" --type SecureString --value "file://$_f" --overwrite >/dev/null
+  rm -f "$_f"
+}
 namespace="/todoist-apple-calendar"
 
 read -r -s -p "Todoist API token (input hidden): " todoist_token
@@ -14,7 +20,5 @@ if [[ -z "$todoist_token" || -z "$apple_password" ]]; then
   exit 2
 fi
 
-aws ssm put-parameter --region "$region" --name "$namespace/todoist-token" \
-  --type SecureString --value "$todoist_token" --overwrite >/dev/null
-aws ssm put-parameter --region "$region" --name "$namespace/apple-app-password" \
-  --type SecureString --value "$apple_password" --overwrite >/dev/null
+put_secret "$namespace/todoist-token" "$todoist_token"
+put_secret "$namespace/apple-app-password" "$apple_password"

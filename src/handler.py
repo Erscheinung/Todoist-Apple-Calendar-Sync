@@ -26,6 +26,7 @@ from urllib.request import Request, urlopen
 import boto3
 
 from google_calendar import FREEBUSY_SCOPE, GoogleCalendar, event_body as google_event_body, fingerprint as google_fingerprint
+from ics_calendar import read_busy as ics_busy
 from week_digest import build_digest, fit_budget
 
 LOG = logging.getLogger()
@@ -55,6 +56,8 @@ APPLE_ENABLED = bool(os.getenv("APPLE_ACCOUNT_EMAIL"))
 GOOGLE_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "")
 GOOGLE_SA_PARAMETER = os.getenv("GOOGLE_SERVICE_ACCOUNT_PARAMETER", "")
 GOOGLE_BUSY_CALENDAR_IDS = [c for c in os.getenv("GOOGLE_BUSY_CALENDAR_IDS", "").split(",") if c.strip()]
+ICS_URL_PARAMETER = os.getenv("ICS_URL_PARAMETER", "")
+ICS_ALL_DAY_BUSY = os.getenv("ICS_ALL_DAY_BUSY", "false").lower() == "true"
 DIGEST_TOKEN_PARAMETER = os.getenv("DIGEST_TOKEN_PARAMETER", "")
 DIGEST_HOURS = os.getenv("DIGEST_HOURS", "08:00-21:00")
 _digest_cache: tuple[float, dict] | None = None
@@ -236,15 +239,24 @@ def _digest_response(event) -> dict:
             LOG.warning("Digest: Todoist read failed: %s", type(exc).__name__)
             return {"statusCode": 503, "body": ""}
         busy, failed = {}, 0
+        start = now.astimezone(DISPLAY_TIMEZONE).replace(hour=0, minute=0, second=0, microsecond=0)
         if GOOGLE_BUSY_CALENDAR_IDS and GOOGLE_SA_PARAMETER:
-            start = now.astimezone(DISPLAY_TIMEZONE).replace(hour=0, minute=0, second=0, microsecond=0)
             try:
                 google = GoogleCalendar(_secret(GOOGLE_SA_PARAMETER), "", scope=FREEBUSY_SCOPE)
                 busy = google.busy(GOOGLE_BUSY_CALENDAR_IDS, start, start + timedelta(days=7))
             except Exception as exc:
                 LOG.warning("Digest: free/busy failed: %s", type(exc).__name__)
             failed = len(GOOGLE_BUSY_CALENDAR_IDS) - len(busy)
-        body = build_digest(tasks, busy, now, DISPLAY_TIMEZONE, hours=_hours(), busy_expected=len(GOOGLE_BUSY_CALENDAR_IDS),
+        if GOOGLE_BUSY_CALENDAR_IDS and not GOOGLE_SA_PARAMETER:
+            failed += len(GOOGLE_BUSY_CALENDAR_IDS)
+        if ICS_URL_PARAMETER:
+            try:
+                busy["ics"] = ics_busy(_secret(ICS_URL_PARAMETER), start, start + timedelta(days=7), DISPLAY_TIMEZONE, ICS_ALL_DAY_BUSY)
+            except Exception as exc:
+                # Do not log exception text: it may contain the credential-bearing URL.
+                LOG.warning("Digest: private calendar read failed: %s", type(exc).__name__)
+                failed += 1
+        body = build_digest(tasks, busy, now, DISPLAY_TIMEZONE, hours=_hours(), busy_expected=len(GOOGLE_BUSY_CALENDAR_IDS) + int(bool(ICS_URL_PARAMETER)),
                             caveats=["calendarUnavailable"] if failed else [])
         body = fit_budget(body)
         _digest_cache = (time.time() + 60, body)

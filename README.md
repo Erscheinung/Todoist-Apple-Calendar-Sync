@@ -163,3 +163,65 @@ If iCloud returns `Unauthorized`, revoke the old app-specific password in your A
 ## Security notes
 
 Secrets are stored as encrypted SSM `SecureString` parameters and never belong in this repository. The Lambda role can only read the two parameters under its configured namespace and access its own DynamoDB mapping table. The calendar events contain a Todoist task ID so the sync can identify only events that it owns.
+
+
+## Private ICS calendar for the shared Watch / nAI digest
+
+The digest can read a private HTTPS iCalendar feed without a Google API project,
+OAuth consent, service account or iCloud password. Its URL is a bearer credential:
+store it only in SSM SecureString at `<namespace>/calendar-ics-url`. Never use the
+public embed page or commit the private URL. The Watch and nAI receive only the
+separate digest endpoint and digest token, never this feed URL.
+
+Set `EnableWeekDigest=true`, `EnableIcsCalendar=true` and retain the existing sync
+parameters. `IcsAllDayBusy=false` makes all-day events **informational by default**,
+matching nAI's calendar policy. Set it to `true` if opaque all-day events should
+reserve the whole local day (including 23/25-hour DST days). Transparent and
+cancelled events never block time. Recurrences, exclusions and moved instances
+are expanded for the seven-day horizon. Floating events use `DisplayTimezone`.
+Events carrying `X-TODOIST-TASK-ID` are excluded to avoid counting mirrored work
+twice; unrelated copies without this marker cannot be identified automatically.
+Only busy intervals leave the adapter; event titles, notes, locations and IDs do not.
+
+The GET has a five-second network timeout, a 2 MiB response limit and refuses
+redirects. Source/occurrence counts are capped at 5,000; the Lambda timeout is the
+CPU boundary for recurrence expansion. An unreadable/malformed/oversized feed is
+partial coverage, **never an empty/free calendar**. A valid empty feed counts as
+one successfully read calendar. Digest source time is its fetch time; an upstream
+feed may itself lag calendar edits, so this is not real-time push sync.
+
+### Update an existing stack without touching the calendar writer
+
+Do **not** use the default deploy script for this update: it invokes the sync
+function as a smoke check. Instead prepare a CloudFormation UPDATE change set:
+
+1. Run `scripts/build.sh` locally. Upload its ZIP under a new artifact key in the
+   existing artifact bucket. Set **DigestArtifactKey** to that key and keep
+   **ArtifactKey** on its previous value. The existing sync Lambda then retains
+   its code, environment, schedule and calendar target.
+2. Put the private feed URL into `<namespace>/calendar-ics-url` as SecureString
+   from a mode-0600 file using `--value file://<private-file>`. Generate a separate
+   random digest token in a mode-0600 file and store it at
+   `<namespace>/digest-token`; preserve an existing token when present. Neither
+   value should appear in shell arguments, history or logs.
+3. Create an UPDATE change set with this template, `CAPABILITY_NAMED_IAM`,
+   `UsePreviousValue=true` for all existing parameters, and only these overrides:
+   `EnableWeekDigest=true`, `EnableIcsCalendar=true`, `DigestArtifactKey=<new-key>`
+   and the chosen `IcsAllDayBusy` policy. Leave Google busy IDs empty for an
+   ICS-only setup. Inspect the change set before executing it.
+4. Expected resources: a new digest role, digest Lambda (256 MiB, concurrency 2),
+   HTTPS Function URL and its two invoke permissions. The role can read Todoist,
+   digest-token and private-feed SSM parameters plus write its own logs; it has no
+   DynamoDB, Apple password or Google service-account access in ICS-only mode.
+   SSM parameters and the ZIP upload are separate from CloudFormation.
+5. After executing the approved change set, make a **GET of the digest URL only**
+   using its bearer token; inspect version/coverage/counts without logging task
+   titles. Never invoke the sync Lambda during this validation.
+6. Configure nAI's private digest URL/secret files and ClaudeWatch's existing
+   Keychain provisioning with the same digest endpoint/token. Those clients need
+   no Google/iCloud credentials. Live Watch behavior remains a device check.
+
+Rollback: disable the digest (`EnableWeekDigest=false`, `EnableIcsCalendar=false`)
+while retaining previous sync parameters, or restore the previous digest artifact
+key. SecureString parameters and artifact objects require separate cleanup if
+no longer wanted. No deployed change is implied by these instructions.

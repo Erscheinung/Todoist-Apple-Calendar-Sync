@@ -32,6 +32,16 @@ Parameters:
     Type: String
     Default: ''
     Description: Comma-separated Google calendar IDs (shared with the service account, "See only free/busy" is enough) whose busy time goes into the week digest.
+  EnableIcsCalendar:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Read the private ICS URL in the calendar-ics-url SecureString parameter. No Google API or calendar write access required.
+  IcsAllDayBusy:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Count opaque all-day ICS events as busy. Default informational, matching nAI policy.
   EnableWeekDigest:
     Type: String
     Default: 'false'
@@ -41,6 +51,10 @@ Parameters:
     Type: String
     Default: '08:00-21:00'
     Description: Local hours used for free-time minutes in the digest.
+  DigestArtifactKey:
+    Type: String
+    Default: ''
+    Description: Optional separate digest ZIP key in ArtifactBucket; leaves the existing sync artifact unchanged.
   ArtifactBucket:
     Type: String
   ArtifactKey:
@@ -49,6 +63,8 @@ Parameters:
 Conditions:
   WeekDigest: !Equals [!Ref EnableWeekDigest, 'true']
   GoogleOn: !Not [!Equals [!Ref GoogleCalendarId, '']]
+  SeparateDigestArtifact: !Not [!Equals [!Ref DigestArtifactKey, '']]
+  IcsCalendarOn: !Equals [!Ref EnableIcsCalendar, 'true']
   GoogleBusyOn: !Not [!Equals [!Ref GoogleBusyCalendarIds, '']]
 
 Resources:
@@ -182,7 +198,8 @@ Resources:
                 Resource:
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${Namespace}/todoist-token
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${Namespace}/digest-token
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${Namespace}/google-service-account
+                  - !If [GoogleBusyOn, !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${Namespace}/google-service-account', !Ref 'AWS::NoValue']
+                  - !If [IcsCalendarOn, !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${Namespace}/calendar-ics-url', !Ref 'AWS::NoValue']
 
   DigestFunction:
     Type: AWS::Lambda::Function
@@ -198,11 +215,13 @@ Resources:
       ReservedConcurrentExecutions: 2
       Code:
         S3Bucket: !Ref ArtifactBucket
-        S3Key: !Ref ArtifactKey
+        S3Key: !If [SeparateDigestArtifact, !Ref DigestArtifactKey, !Ref ArtifactKey]
       Environment:
         Variables:
           TODOIST_TOKEN_PARAMETER: !Sub ${Namespace}/todoist-token
           DIGEST_TOKEN_PARAMETER: !Sub ${Namespace}/digest-token
+          ICS_URL_PARAMETER: !If [IcsCalendarOn, !Sub '${Namespace}/calendar-ics-url', '']
+          ICS_ALL_DAY_BUSY: !Ref IcsAllDayBusy
           GOOGLE_SERVICE_ACCOUNT_PARAMETER: !If [GoogleBusyOn, !Sub '${Namespace}/google-service-account', '']
           GOOGLE_BUSY_CALENDAR_IDS: !Ref GoogleBusyCalendarIds
           DISPLAY_TIMEZONE: !Ref DisplayTimezone

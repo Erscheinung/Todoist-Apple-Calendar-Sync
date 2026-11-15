@@ -103,6 +103,25 @@ class DigestTests(unittest.TestCase):
         self.assertEqual((body["busyExpected"], body["busySources"], body["complete"]), (2, 1, False))
         self.assertEqual(body["caveats"], ["calendarUnavailable"])
 
+    def test_private_ics_empty_calendar_is_complete_not_missing(self):
+        self.h.ICS_URL_PARAMETER = "/ns/calendar-ics-url"
+        self.h._secret = lambda name: "fixture"
+        self.h.ics_busy = lambda *args: []
+        body = json.loads(self.h.digest_handler(event("Bearer fixture"), None)["body"])
+        self.assertEqual((body["busyExpected"], body["busySources"], body["complete"]), (1, 1, True))
+        self.assertNotIn("fixture", json.dumps(body))
+
+    def test_private_ics_failure_is_partial_and_does_not_touch_sync(self):
+        self.h.ICS_URL_PARAMETER = "/ns/calendar-ics-url"
+        self.h._secret = lambda name: "fixture"
+        def failed(*args):
+            raise ValueError("private URL must not appear in response")
+        self.h.ics_busy = failed
+        body = json.loads(self.h.digest_handler(event("Bearer fixture"), None)["body"])
+        self.assertEqual((body["busyExpected"], body["busySources"], body["complete"]), (1, 0, False))
+        self.assertEqual(body["caveats"], ["calendarUnavailable"])
+        self.assertNotIn("private URL", json.dumps(body))
+
     def test_complete_when_nothing_failed(self):
         body = json.loads(self.h.digest_handler(event("Bearer s3cret"), None)["body"])
         self.assertTrue(body["complete"])
